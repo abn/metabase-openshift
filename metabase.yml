@@ -1,0 +1,209 @@
+apiVersion: v1
+kind: Template
+metadata:
+  creationTimestamp: null
+  name: metabase
+  annotations:
+    openshift.io/display-name: "Metabase backed by PostgreSQL"
+    description: >
+      This is a PostgreSQL backed Metabase (http://www.metabase.com/) deployment. Metabase is the
+      easy, open source way for everyone in your company to ask questions and learn from data.
+    iconClass: "icon-scala"
+objects:
+- apiVersion: v1
+  kind: Secret
+  metadata:
+      name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+  data:
+    username: ${POSTGRESQL_USER}
+    password: ${POSTGRESQL_PASSWORD}
+  type: Opaque
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${METABASE_SERVICE_NAME}
+  spec:
+    accessModes:
+    - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${POSTGRESQL_VOLUME_CAPACITY}
+- apiVersion: v1
+  kind: Service
+  metadata:
+    creationTimestamp: null
+    labels:
+      app: metabase
+    name: ${METABASE_SERVICE_NAME}
+  spec:
+    ports:
+    - name: ${METABASE_SERVICE_NAME}
+      port: 3000
+      protocol: TCP
+      targetPort: 3000
+    selector:
+      app: metabase
+      deploymentconfig: ${METABASE_SERVICE_NAME}
+    sessionAffinity: None
+    type: ClusterIP
+  status:
+    loadBalancer: {}
+- apiVersion: v1
+  kind: DeploymentConfig
+  metadata:
+    labels:
+      app: metabase
+    name: metabase
+  spec:
+    replicas: 1
+    selector:
+      app: metabase
+      deploymentconfig: metabase
+    strategy:
+      resources: {}
+      type: Recreate
+    template:
+      metadata:
+        creationTimestamp: null
+        labels:
+          app: metabase
+          deploymentconfig: metabase
+          template: metabase
+      spec:
+        containers:
+        - env:
+          - name: MB_DB_TYPE
+            value: postgres
+          - name: MB_DB_DBNAME
+            value: ${POSTGRESQL_DATABASE}
+          - name: MB_DB_PORT
+            value: ${POSTGRESQL_PORT}
+          - name: MB_DB_USER
+            valueFrom:
+              secretKeyRef:
+                name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+                key: username
+          - name: MB_DB_PASS
+            valueFrom:
+              secretKeyRef:
+                name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+                key: password
+          - name: MB_DB_HOST
+            value: ${METABASE_SERVICE_NAME}-postgresql
+          image: ${METABASE_IMAGE}
+          imagePullPolicy: Always
+          name: ${METABASE_SERVICE_NAME}
+          ports:
+          - containerPort: 3000
+            name: ${METABASE_SERVICE_NAME}
+            protocol: TCP
+          resources: {}
+          securityContext:
+            runAsUser: 1000
+          terminationMessagePath: /dev/termination-log
+          livenessProbe:
+            failureThreshold: 30
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 240
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 3
+            timeoutSeconds: 3
+        - env:
+          - name: POSTGRESQL_DATABASE
+            value: ${POSTGRESQL_DATABASE}
+          - name: POSTGRESQL_USER
+            valueFrom:
+              secretKeyRef:
+                name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+                key: username
+          - name: POSTGRESQL_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+                key: password
+          image: ${POSTGRESQL_IMAGE}
+          imagePullPolicy: Always
+          name: ${METABASE_SERVICE_NAME}-postgresql
+          ports:
+          - containerPort: ${POSTGRESQL_PORT}
+            protocol: TCP
+          resources: {}
+          securityContext:
+            runAsUser: 1000
+          terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: ${METABASE_SERVICE_NAME}-postgresql-data
+        dnsPolicy: ClusterFirst
+        restartPolicy: Always
+        securityContext: {}
+        serviceAccount: ${METABASE_SERVICE_NAME}
+        serviceAccountName: ${METABASE_SERVICE_NAME}
+        terminationGracePeriodSeconds: 30
+        volumes:
+        - name: ${METABASE_SERVICE_NAME}-postgresql-data
+          persistentVolumeClaim:
+            claimName: ${METABASE_SERVICE_NAME}-postgresql
+        livenessProbe:
+          failureThreshold: 30
+          tcpSocket:
+              port: ${POSTGRESQL_PORT}
+          initialDelaySeconds: 240
+          timeoutSeconds: 3
+        readinessProbe:
+          tcpSocket:
+              port: ${POSTGRESQL_PORT}
+          initialDelaySeconds: 3
+          timeoutSeconds: 3
+    triggers:
+    - type: ConfigChange
+    strategy:
+      type: Rolling
+  status: {}
+parameters:
+- name: METABASE_SERVICE_NAME
+  displayName: Metabase Service Name
+  value: metabase
+  required: true
+- name: METABASE_IMAGE
+  displayName: Metabase Docker Image
+  value: metabase/metabase:latest
+  description: The metabase docker image to use
+  required: true
+- name: POSTGRESQL_IMAGE
+  displayName: PostgreSQL Docker Image
+  value: registry.access.redhat.com/rhscl/postgresql-95-rhel7:latest
+  description: The postgresql docker image to use
+  required: true
+- name: POSTGRESQL_DATABASE
+  displayName: PostgreSQL Database
+  description: Database name to use
+  value: metabase
+  required: true
+- name: POSTGRESQL_PORT
+  displayName: PostgreSQL Database Port
+  description: Port to use when connecting to the database.
+  value: "5432"
+  required: true
+- name: POSTGRESQL_USER
+  displayName: PostgreSQL Username
+  description: Username for metabase database user
+  value: metabase
+  required: true
+- name: POSTGRESQL_PASSWORD
+  displayName: PostgreSQL Password
+  description: Password for metabase database user
+  generate: expression
+  from: "[a-zA-Z0-9]{32}"
+  required: true
+- name: POSTGRESQL_VOLUME_CAPACITY
+  displayName: Database Data Volume Capacity
+  description: Capacity required for the PostgreSQL database data volume
+  value: 1Gi
+  required: true
