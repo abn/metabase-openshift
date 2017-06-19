@@ -11,9 +11,19 @@ metadata:
     iconClass: "icon-scala"
 objects:
 - apiVersion: v1
+  kind: ServiceAccount
+  metadata:
+    name: ${METABASE_SERVICE_NAME}
+    labels:
+      app: metabase
+      service: ${METABASE_SERVICE_NAME}
+- apiVersion: v1
   kind: Secret
   metadata:
       name: ${METABASE_SERVICE_NAME}-postgresql-credentials
+      labels:
+        app: metabase
+        service: ${METABASE_SERVICE_NAME}
   data:
     username: ${POSTGRESQL_USER}
     password: ${POSTGRESQL_PASSWORD}
@@ -21,10 +31,13 @@ objects:
 - apiVersion: v1
   kind: PersistentVolumeClaim
   metadata:
-    name: ${METABASE_SERVICE_NAME}
+    name: ${METABASE_SERVICE_NAME}-postgresql
+    labels:
+      app: metabase
+      service: ${METABASE_SERVICE_NAME}
   spec:
     accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
     resources:
       requests:
         storage: ${POSTGRESQL_VOLUME_CAPACITY}
@@ -32,9 +45,10 @@ objects:
   kind: Service
   metadata:
     creationTimestamp: null
+    name: ${METABASE_SERVICE_NAME}
     labels:
       app: metabase
-    name: ${METABASE_SERVICE_NAME}
+      service: ${METABASE_SERVICE_NAME}
   spec:
     ports:
     - name: ${METABASE_SERVICE_NAME}
@@ -51,14 +65,15 @@ objects:
 - apiVersion: v1
   kind: DeploymentConfig
   metadata:
+    name: metabase
     labels:
       app: metabase
-    name: metabase
+      service: ${METABASE_SERVICE_NAME}
   spec:
     replicas: 1
     selector:
       app: metabase
-      deploymentconfig: metabase
+      deploymentconfig: ${METABASE_SERVICE_NAME}
     strategy:
       resources: {}
       type: Recreate
@@ -67,7 +82,8 @@ objects:
         creationTimestamp: null
         labels:
           app: metabase
-          deploymentconfig: metabase
+          service: ${METABASE_SERVICE_NAME}
+          deploymentconfig: ${METABASE_SERVICE_NAME}
           template: metabase
       spec:
         containers:
@@ -77,7 +93,7 @@ objects:
           - name: MB_DB_DBNAME
             value: ${POSTGRESQL_DATABASE}
           - name: MB_DB_PORT
-            value: ${POSTGRESQL_PORT}
+            value: "5432"
           - name: MB_DB_USER
             valueFrom:
               secretKeyRef:
@@ -97,9 +113,10 @@ objects:
           - containerPort: 3000
             name: ${METABASE_SERVICE_NAME}
             protocol: TCP
-          resources: {}
-          securityContext:
-            runAsUser: 1000
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
           terminationMessagePath: /dev/termination-log
           livenessProbe:
             failureThreshold: 30
@@ -131,12 +148,25 @@ objects:
           imagePullPolicy: Always
           name: ${METABASE_SERVICE_NAME}-postgresql
           ports:
-          - containerPort: ${POSTGRESQL_PORT}
+          - containerPort: 5432
             protocol: TCP
-          resources: {}
-          securityContext:
-            runAsUser: 1000
+          resources:
+            limits:
+              cpu: 250m
+              memory: 1Gi
+          securityContext: {}
           terminationMessagePath: /dev/termination-log
+          livenessProbe:
+            failureThreshold: 30
+            tcpSocket:
+                port: 5432
+            initialDelaySeconds: 240
+            timeoutSeconds: 3
+          readinessProbe:
+            tcpSocket:
+                port: 5432
+            initialDelaySeconds: 3
+            timeoutSeconds: 3
           volumeMounts:
           - mountPath: /var/lib/pgsql/data
             name: ${METABASE_SERVICE_NAME}-postgresql-data
@@ -150,17 +180,6 @@ objects:
         - name: ${METABASE_SERVICE_NAME}-postgresql-data
           persistentVolumeClaim:
             claimName: ${METABASE_SERVICE_NAME}-postgresql
-        livenessProbe:
-          failureThreshold: 30
-          tcpSocket:
-              port: ${POSTGRESQL_PORT}
-          initialDelaySeconds: 240
-          timeoutSeconds: 3
-        readinessProbe:
-          tcpSocket:
-              port: ${POSTGRESQL_PORT}
-          initialDelaySeconds: 3
-          timeoutSeconds: 3
     triggers:
     - type: ConfigChange
     strategy:
@@ -185,11 +204,6 @@ parameters:
   displayName: PostgreSQL Database
   description: Database name to use
   value: metabase
-  required: true
-- name: POSTGRESQL_PORT
-  displayName: PostgreSQL Database Port
-  description: Port to use when connecting to the database.
-  value: "5432"
   required: true
 - name: POSTGRESQL_USER
   displayName: PostgreSQL Username
