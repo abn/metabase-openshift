@@ -24,7 +24,7 @@ objects:
       labels:
         app: metabase
         service: ${METABASE_SERVICE_NAME}
-  data:
+  stringData:
     username: ${POSTGRESQL_USER}
     password: ${POSTGRESQL_PASSWORD}
   type: Opaque
@@ -63,9 +63,23 @@ objects:
   status:
     loadBalancer: {}
 - apiVersion: v1
+  kind: Route
+  metadata:
+    name: ${METABASE_SERVICE_NAME}
+    labels:
+      app: metabase
+      service: ${METABASE_SERVICE_NAME}
+  spec:
+    tls:
+      insecureEdgeTerminationPolicy: Redirect
+      termination: edge
+    to:
+      kind: Service
+      name: ${METABASE_SERVICE_NAME}
+- apiVersion: v1
   kind: DeploymentConfig
   metadata:
-    name: metabase
+    name: ${METABASE_SERVICE_NAME}
     labels:
       app: metabase
       service: ${METABASE_SERVICE_NAME}
@@ -87,13 +101,20 @@ objects:
           template: metabase
       spec:
         containers:
-        - env:
+        - name: ${METABASE_SERVICE_NAME}
+          image: ${METABASE_IMAGE}
+          imagePullPolicy: Always
+          env:
           - name: MB_DB_TYPE
             value: postgres
-          - name: MB_DB_DBNAME
-            value: ${POSTGRESQL_DATABASE}
+          - name: MB_DB_HOST
+            valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
           - name: MB_DB_PORT
             value: "5432"
+          - name: MB_DB_DBNAME
+            value: ${POSTGRESQL_DATABASE}
           - name: MB_DB_USER
             valueFrom:
               secretKeyRef:
@@ -104,11 +125,18 @@ objects:
               secretKeyRef:
                 name: ${METABASE_SERVICE_NAME}-postgresql-credentials
                 key: password
-          - name: MB_DB_HOST
-            value: ${METABASE_SERVICE_NAME}-postgresql
-          image: ${METABASE_IMAGE}
-          imagePullPolicy: Always
-          name: ${METABASE_SERVICE_NAME}
+          command:
+             - java
+          args:
+            - '-Xmx300m'
+            - '-Xss512k'
+            - '-Dfile.encoding=UTF-8'
+            - '-Dlogfile.path=target/log'
+            - '-XX:+CMSClassUnloadingEnabled'
+            - '-XX:+UseConcMarkSweepGC'
+            - '-server'
+            - '-jar'
+            - '/app/metabase.jar'
           ports:
           - containerPort: 3000
             name: ${METABASE_SERVICE_NAME}
@@ -131,7 +159,10 @@ objects:
               port: 3000
             initialDelaySeconds: 3
             timeoutSeconds: 3
-        - env:
+        - name: ${METABASE_SERVICE_NAME}-postgresql
+          image: ${POSTGRESQL_IMAGE}
+          imagePullPolicy: Always
+          env:
           - name: POSTGRESQL_DATABASE
             value: ${POSTGRESQL_DATABASE}
           - name: POSTGRESQL_USER
@@ -144,9 +175,6 @@ objects:
               secretKeyRef:
                 name: ${METABASE_SERVICE_NAME}-postgresql-credentials
                 key: password
-          image: ${POSTGRESQL_IMAGE}
-          imagePullPolicy: Always
-          name: ${METABASE_SERVICE_NAME}-postgresql
           ports:
           - containerPort: 5432
             protocol: TCP
@@ -154,8 +182,10 @@ objects:
             limits:
               cpu: 250m
               memory: 1Gi
-          securityContext: {}
           terminationMessagePath: /dev/termination-log
+          volumeMounts:
+          - mountPath: /var/lib/pgsql/data
+            name: ${METABASE_SERVICE_NAME}-postgresql-data
           livenessProbe:
             failureThreshold: 30
             tcpSocket:
@@ -167,9 +197,6 @@ objects:
                 port: 5432
             initialDelaySeconds: 3
             timeoutSeconds: 3
-          volumeMounts:
-          - mountPath: /var/lib/pgsql/data
-            name: ${METABASE_SERVICE_NAME}-postgresql-data
         dnsPolicy: ClusterFirst
         restartPolicy: Always
         securityContext: {}
@@ -184,7 +211,6 @@ objects:
     - type: ConfigChange
     strategy:
       type: Rolling
-  status: {}
 parameters:
 - name: METABASE_SERVICE_NAME
   displayName: Metabase Service Name
@@ -192,7 +218,7 @@ parameters:
   required: true
 - name: METABASE_IMAGE
   displayName: Metabase Docker Image
-  value: metabase/metabase:latest
+  value: registry.hub.docker.com/metabase/metabase:latest
   description: The metabase docker image to use
   required: true
 - name: POSTGRESQL_IMAGE
